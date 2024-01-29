@@ -1,0 +1,334 @@
+clear; clc; close all;
+
+aa = 1;   %%runs
+xx=0;
+EbN0dB = 20;                            %energy per bit sent
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Parameters%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+B = 5;                              %number of bits sent
+%         bit = randi([0,1],1,B);           %random integer generator
+%         between 0 and 1, column: 1, row: number of bits
+bit = [0 1 0 1 0];                  %bit vector
+LB = length(bit);                   %signal length
+T = 10^-8;                          %bit duration
+bw = 1/T;                           %bit rate and bw
+f_mark = 2/(2*T);                   %binary 0, 0.5 MHz
+m_period = 1/f_mark;                %one period of mark freq
+f_space = f_mark + bw;              %binary 1, 1 MHz
+s_period = 1/f_space;               %one period of space freq
+Fs = 3.02e+9;                       %sample frequency modulated signal
+Ts = 1/Fs;                          %sample rate modulated signal
+sps = ceil(T/Ts);                   %samples per second // baud rate (ceil: rounds to next positive integer
+t0_mod = 0:Ts:T;
+fc = (f_space+f_mark)/2;            %center frequency
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Sampling Intervals%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+packet_duration = (0:Ts:LB*T-Ts);
+bit_duration = (0:Ts:T);
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Signals%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+M1 = sin(2*pi*f_mark*t0_mod);            %mark signal model
+S1 = sin(2*pi*f_space*t0_mod);           %space signal model
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Phase Noise %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+t = 1;                      %duration
+N = 155;                    %N samples
+dt = t/(length(N));
+dW = zeros(1,length(N));    %allocated space for dW
+W = zeros(1,length(N));     %allocate space for W
+
+%phase noise
+phn = 10e-4; %phase noise variance
+dW = sqrt(phn).*(randn(N,1));
+W(1) = dW(1);
+for j = 2:N
+    dW = sqrt(phn).*(randn(N,1));
+    W(j) = W(j-1) + dW(j);        %
+end
+v = var(dW); % 19e-4
+for ss = 1:5:31                                %SNR for loop
+    xx=xx+1;                                %counter
+    for ii=1:aa                             %number SNR loops
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %Modulation%
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        mod = [];                       %array for modulated signal
+
+        for i=1:B                       %for loop from 1 to the total number of bits sent
+            if bit(i)==1                %call to bit vector, if the bit is 1, append space signal for 31 samples (bit duration) 
+                mod=[mod; S1.'];        %append Space signal into modulated signal (.') converts vectors => columns and vice versa
+            else
+                mod=[mod; M1.'];
+            end
+        end
+
+        t_mod = 0:Ts:B*(ceil(T/Ts))*Ts-Ts;  %modulated signal timing 
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %% Upconversion by 73GHz
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%         new = mod .* (cos(2*pi*73e+9*t_mod) + sin(2*pi*73e+9*t_mod)).';        
+        
+%         figure()
+%         plot(t_mod,mod)
+%         title("Modulated Signal")
+
+%         figure()
+%         plot(t_mod,new)
+%         title("Transmitted Signal")
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %% Power Estimate & Bandpower%
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        % pRMS = rms(y_I)^2;
+        % % powbp = bandpower(y_I, Fs, [0 Fs/2]);
+        % % obw(y_I, Fs);
+        % % [wd, lo, hi, power] = obw(y_I, Fs);
+        % sum of ^2 values of signal /
+        % ydb = 10*log10(pRMS);
+
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %% Noise %
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %AWGN
+        EbN0_linear = 10.^((ss)/10);
+        Eb = sum(abs(mod).^2)/(length(mod));     %compute energy per bit
+        N0 = Eb/EbN0_linear;                     %required NSD from Eb/N0
+        noise = sqrt(N0)*(randn(length(mod),1));
+        ber_TH = berawgn(EbN0dB, 'fsk',2,'noncoherent');
+        
+
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %% Transmitted/Received Signal w/out Phase Noise
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        tx = mod + noise;        
+        
+        figure()
+        plot(t_mod,tx)
+        title("Signal with AWGN")
+        xlabel("Time [s]")
+        ylabel("Amplitude")        
+
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %% Transmitted/Received Signal with Phase Noise
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        s = mod .* exp(1j.*W).';        
+        new = s + noise;
+%         figure()
+%         plot(t_mod,real(s))
+%         hold on
+%         plot(t_mod,imag(s))
+%         title("Signal With Phase Noise")
+%         xlabel("Time [s]")
+%         ylabel("Amplitude")        
+%     
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %% Lowpass Filter (remove sidebands)
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        lp = lowpass(new, 600e6, Fs);
+        lptx = lowpass(tx, 600e6, Fs);
+
+        figure()
+        plot(t_mod,real(lp))
+        hold on
+        plot(t_mod,imag(lp))
+        title("Receieved Phase Noise Signal")
+        xlabel("Time [s]")
+        ylabel("Amplitude")
+        xlim([0 5.15e-8])
+
+        figure()
+        plot(t_mod,real(lptx))
+        hold on
+        plot(t_mod,imag(lptx))
+        title("Receieved AWGN Signal")
+        xlabel("Time [s]")
+        ylabel("Amplitude")
+        xlim([0 5.15e-8])
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %% Fast Fourier Transform %%
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %Upconverted Signal
+%         D = fft(new);
+%         Ld = length(new);
+%         E = fftshift(D);                        %center 
+%         fshift = (-Ld/2:Ld/2-1)*(Fs/Ld);
+%         powershift = abs(E).^2/Ld;
+% 
+%         figure()
+%         plot(fshift,abs(E))
+%         title('Modulated Signal with Phase Noise')
+%         xlabel('Frequency')
+%         ylabel('Magnitude [dB]')
+%         
+%         D1 = fft(s);
+%         Ld1 = length(s);
+%         E1 = fftshift(D1);                        %center 
+%         fshift1 = (-Ld1/2:Ld1/2-1)*(Fs/Ld1);
+%         powershift1 = abs(E1).^2/Ld1;
+% 
+%         figure()
+%         plot(fshift1,abs(E1))
+%         title('Modulated Signal No AWGN Noise but Phase Noise')
+%         xlabel('Frequency')
+%         ylabel('Magnitude [dB]')
+% 
+%          %Downconverted Signal
+%         D0 = fft(mod);
+%         Ld0 = length(mod);
+%         E0 = fftshift(D0);
+%         f0 = (0:length(D0)-1)*Fs/length(D0);
+%         fshift0 = (-Ld0/2:Ld0/2-1)*(Fs/Ld0);
+%         powershift0 = abs(E0).^2/Ld0;
+% 
+%         figure()
+%         plot(fshift0,abs(E0))
+%         title('Modulated Signal')
+%         xlabel('Frequency')
+%         ylabel('Magnitude [dB]')
+
+%         D1 = fft(mod);
+%         Ld1 = length(mod);
+%         E1 = fftshift(D1);
+%         f1 = (0:length(D1)-1)*Fs/length(D1);
+%         fshift0 = (-Ld1/2:Ld1/2-1)*(Fs/Ld1);
+%         powershift0 = abs(E1).^2/Ld1;
+% 
+%         figure()
+%         plot(fshift0,abs(E1))
+%         title('Modulated Signal Frequency Domain')
+%         xlabel('Frequency')
+%         ylabel('Magnitude [dB]')
+
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %% Introduce Frequency/Phase Offset
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%         sx = 0;
+%         for ff = 1:length(lfp)
+%             sx = sx+1;
+%         f_offset = 73e+9 + 1.5e+4;
+        p_offset = 0;
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %% Downconversion
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %(cos(2*pi*73e9*t_mod) + sin(2*pi*73e9*t_mod)).';
+   
+%         received1 = s .*(-cos(2*pi*(73e+9)*t_mod) - sin(2*pi*(73e+9)*t_mod)).';
+%         lp_r = lowpass(new, 600e+6, Fs);
+% 
+%         figure()
+%         plot(t_mod,lp_r)
+%         title("Receieved Downconverted Signal")
+%         xlabel("Time [s]")
+%         ylabel("Amplitude")
+%         xlim([0 5.15e-8])
+        
+%         D1 = fft(received1);
+%         LD1 = length(D1);
+%         E1 = fftshift(D1);
+%         f1 = (0:length(D1)-1)*Fs/length(D1);
+%         fshift1 = (-LD1/2:LD1/2-1)*(Fs/LD1);
+%         powershift1 = abs(E1).^2/LD1;
+
+%         figure()
+%         plot(fshift1,abs(E1))
+%         xlabel('Frequency')
+%         ylabel('Magnitude [dB]')
+%         title('Downconverted Signal Frequency Domain')
+        %end                          %end of frequency offset 
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %Matched Filters%
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        % mark
+        matched0 = conv(new, fliplr(M1));
+        % inst_sample0 = abs(matched0(sps:sps:end-sps));
+        % matched0_plot = 1:numel(matched0);
+
+        % space
+        matched1 = conv(new, fliplr(S1));
+        % inst_sample1 = abs(matched1(sps:sps:end-sps));
+        % matched1_plot = 1:numel(matched1);
+
+        matched2 = conv(tx, fliplr(M1));
+        matched3 = conv(tx, fliplr(S1));
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %Demodulators%
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        demod = [];
+        BER = [];
+
+        XX=1;
+        for k = 1:sps:length(matched0)-sps
+            m0sum = sum(abs(matched0(k:k+sps)));
+            m1sum = sum(abs(matched1(k:k+sps)));
+
+            if m0sum < m1sum
+                PP = 1;
+            else
+                PP = 0;
+            end
+            XX = XX+1;
+            demod = [demod PP];
+        end
+        demod
+
+        err = 0;
+        for a = 1:LB
+            if bit(a) ~= demod(a)
+                err = err+1;
+            end
+            BER = err/length(bit);
+        end
+        BER1_0(ii) = BER;
+
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %Demodulator without Phase Noise
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        demod1 = [];
+        BER1 = [];
+
+        yy = 1;
+        for l = 1:sps:length(matched2)-sps
+            m2sum = sum(abs(matched2(l:l+sps)));
+            m3sum = sum(abs(matched3(l:l+sps)));
+
+            if m2sum < m3sum
+                pp = 1;
+            else
+                pp = 0;
+            end
+            yy = yy+1;
+            demod1 = [demod1 pp];
+        end
+        demod1
+
+        err1 = 0;
+        for c = 1:LB
+            if bit(c) ~= demod1(c)
+                err1 = err1+1;
+            end
+            BER1 = err1/length(bit);
+        end
+        BER1_1(ii) = BER1;
+
+    end     %iteration end
+    AVG_BER0(xx)=sum(BER1_0)/(aa);
+    AVG_BER1(xx)=sum(BER1_1)/(aa);
+end         %end of Eb/N0
+
+EbN0dB = 1:5:31;
+figure()
+semilogy(EbN0dB,AVG_BER0)
+hold on
+semilogy(EbN0dB,AVG_BER1)
+grid on
+legend("BER with Phase Noise", "BER without Phase Noise")
+title("Comparison of BER")
+xlabel('Eb/No (dB)')
+ylabel('BER')
+hold off
